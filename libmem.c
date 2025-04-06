@@ -105,7 +105,7 @@ int __alloc(struct pcb_t *caller, int vmaid, int rgid, int size, int *alloc_addr
   regs.a3 = PAGING_PAGE_ALIGNSZ(size);
   
   /* SYSCALL 17 sys_memmap */
-  int ret = syscall(17, SYSMEM_INC_OP, &regs);
+  int ret = syscall(caller, SYSMEM_INC_OP, &regs);
   if (ret < 0) {
       pthread_mutex_unlock(&mmvm_lock);
       return -1;
@@ -127,7 +127,7 @@ int __alloc(struct pcb_t *caller, int vmaid, int rgid, int size, int *alloc_addr
  *@vmaid: ID vm area to alloc memory region
  *@rgid: memory region ID (used to identify variable in symbole table)
  *@size: allocated size
- *
+ */
 
 /*liballoc - PAGING-based allocate a region memory
  *@proc:  Process executing the instruction
@@ -254,7 +254,7 @@ int pg_getpage(struct mm_struct *mm, int pgn, int *fpn, struct pcb_t *caller)
     if (pg_node != NULL) {
       pg_node->pgn = pgn;
       pg_node->pg_next = NULL;
-      enlist_pgn_node(caller->mm, pg_node); // Correct call with proper node creation
+      enlist_pgn_node(&(caller->mm->fifo_pgn), pgn); // Correct call with proper node creation
     }
   }
 
@@ -286,7 +286,7 @@ int pg_getval(struct mm_struct *mm, int addr, BYTE *data, struct pcb_t *caller)
   /* Set up system call to read from physical memory */
   struct sc_regs regs;
   regs.a1 = phyaddr;        // Physical address to read from
-  regs.a2 = (uint32_t)data; // Where to store the result
+  regs.a2 = (uint32_t)(uintptr_t)data; // Where to store the result
   regs.a3 = 1;              // Read 1 byte
 
   /* SYSCALL 17 sys_memmap with SYSMEM_IO_READ operation */
