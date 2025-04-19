@@ -137,11 +137,17 @@
   */
  int liballoc(struct pcb_t *proc, uint32_t size, uint32_t reg_index)
  {
-   /* TODO Implement allocation on vm area 0 */
    int addr;
+   int ret = __alloc(proc, 0, reg_index, size, &addr);
  
-   /* By default using vmaid = 0 */
-   return __alloc(proc, 0, reg_index, size, &addr);
+   // In ra trạng thái bộ nhớ sau khi cấp phát
+   printf("===== PHYSICAL MEMORY AFTER ALLOCATION =====\n");
+   printf("PID=%d - Region=%d - Address=%08X - Size=%d byte\n",
+          proc->pid, reg_index, addr, size);
+   print_pgtbl(proc, 0, -1);
+   printf("================================================================\n");
+ 
+   return ret;
  }
  
  /*libfree - PAGING-based free a region memory
@@ -189,13 +195,15 @@
  
  int libfree(struct pcb_t *proc, uint32_t reg_index)
  {
-   /* Implementation of free region */
-   if (reg_index < 0 || reg_index >= PAGING_MAX_SYMTBL_SZ) {
-     return -1; // Invalid region index
-   }
+   int ret = __free(proc, 0, reg_index);
  
-   /* By default using vmaid = 0 */
-   return __free(proc, 0, reg_index);
+   // In ra trạng thái bộ nhớ sau khi giải phóng
+   printf("===== PHYSICAL MEMORY AFTER DEALLOCATION =====\n");
+   printf("PID=%d - Region=%d\n", proc->pid, reg_index);
+   print_pgtbl(proc, 0, -1);
+   printf("================================================================\n");
+ 
+   return ret;
  }
  
  /*pg_getpage - get the page in ram
@@ -218,28 +226,39 @@
      int tgtfpn = PAGING_PTE_SWP(pte); // Target frame in swap space
  
      /* Find victim page to replace */
-     find_victim_page(caller->mm, &vicpgn);
-     
-     /* Get victim page's frame number */
-     vicpte = mm->pgd[vicpgn];
-     vicfpn = PAGING_FPN(vicpte);
+     if (find_victim_page(caller->mm, &vicpgn) != 0) {
+       // Handle the case when no victim page is found
+       // Try to get a free frame directly from RAM
+       if (MEMPHY_get_freefp(caller->mram, &vicfpn) != 0) {
+         return -1; // No free frames and no victims - cannot proceed
+       }
+       
+       // Skip swap out as we have a free frame
+     } else {
+       /* Get victim page's frame number */
+       vicpte = mm->pgd[vicpgn];
+       vicfpn = PAGING_FPN(vicpte);
  
-     /* Get free frame in swap space */
-     MEMPHY_get_freefp(caller->active_mswp, &swpfpn);
+       /* Get free frame in swap space */
+       if (MEMPHY_get_freefp(caller->active_mswp, &swpfpn) != 0) {
+         return -1; // No free frames in swap space
+       }
  
-     /* Copy victim frame to swap space */
-     struct sc_regs regs;
-     regs.a1 = vicfpn;     // Source frame (in RAM)
-     regs.a2 = swpfpn;     // Destination frame (in swap)
-     regs.a3 = 0;          // Additional parameters if needed
+       /* Copy victim frame to swap space */
+       struct sc_regs regs;
+       regs.a1 = vicfpn;     // Source frame (in RAM)
+       regs.a2 = swpfpn;     // Destination frame (in swap)
+       regs.a3 = 0;          // Additional parameters if needed
  
-     /* Execute swap operation */
-     syscall(caller, SYSMEM_SWP_OP, &regs);
+       /* Execute swap operation */
+       syscall(caller, SYSMEM_SWP_OP, &regs);
  
-     /* Update victim's page table entry - mark as swapped out */
-     pte_set_swap(&mm->pgd[vicpgn], swpfpn, 1);
+       /* Update victim's page table entry - mark as swapped out */
+       pte_set_swap(&mm->pgd[vicpgn], swpfpn, 1);
+     }
  
      /* Copy target frame from swap to RAM */
+     struct sc_regs regs;
      regs.a1 = tgtfpn;     // Source frame (in swap)
      regs.a2 = vicfpn;     // Destination frame (in RAM)
      regs.a3 = 0;          // Additional parameters if needed
@@ -251,7 +270,6 @@
      pte_set_fpn(&mm->pgd[pgn], vicfpn);
  
      /* Add page to FIFO queue for future page replacement */
-     // Fixed memory leak by directly calling enlist_pgn_node without extra allocation
      enlist_pgn_node(&(caller->mm->fifo_pgn), pgn);
    }
  
